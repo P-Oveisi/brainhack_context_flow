@@ -27,6 +27,7 @@ from src.analysis import compute_effect_sizes, apply_multiple_testing_correction
 from src.visualize import plot_timeline, plot_effect_sizes, plot_context_heatmap
 from config import PROCESSING_CONFIG, SYNC_CONFIG
 
+
 # Set plotting styles
 plt.style.use('seaborn-v0_8-whitegrid')
 sns.set_context('notebook')
