@@ -1,297 +1,519 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
-Heart Rate Synchronization - Analysis Module
+Analysis module for heart rate synchronization studies.
 
-This module contains functions for statistical analysis:
-- Analyzing context-synchronization relationships
-- Statistical testing
-- Result summarization
+This module provides statistical analysis functions for examining 
+relationships between audio features and heart rate synchronization.
 """
 
 import numpy as np
 import pandas as pd
 from scipy import stats
-import matplotlib.pyplot as plt
-import seaborn as sns
-from statsmodels.stats.multitest import multipletests
+from sklearn.model_selection import KFold
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score, mean_squared_error
+import warnings
+
+# Suppress specific warnings that might appear during analysis
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="Mean of empty slice")
 
 
-def compute_effect_sizes(context_sync_results):
+def compute_statistics(df, feature_cols, target_cols):
     """
-    Compute effect sizes for context-synchronization relationships.
+    Compute statistical measures for relationships between features and targets.
     
     Parameters:
     -----------
-    context_sync_results : dict
-        Dictionary with context-synchronization analysis results
+    df : pandas.DataFrame
+        DataFrame containing features and target variables
+    feature_cols : list
+        List of feature column names
+    target_cols : list
+        List of target column names
         
     Returns:
     --------
-    pd.DataFrame
-        DataFrame with effect sizes and confidence intervals
+    stats_dict : dict
+        Dictionary with statistical results
     """
-    effect_sizes = []
+    stats_dict = {
+        'sample_size': len(df),
+        'feature_count': len(feature_cols),
+        'target_count': len(target_cols),
+        'correlations': {},
+        'significance': {},
+        'r_squared': {}
+    }
     
-    for feature, contexts in context_sync_results.items():
-        for context, stats in contexts.items():
-            # Extract statistics
-            odds_ratio = stats.get('odds_ratio', np.nan)
-            p_value = stats.get('p_value', np.nan)
+    # Compute correlations and p-values
+    for target in target_cols:
+        if target not in df.columns:
+            continue
             
-            # Calculate Cohen's h (effect size for proportions)
-            p1 = stats.get('sync_prob_context_present', np.nan)
-            p2 = stats.get('sync_prob_context_absent', np.nan)
+        corr_results = {}
+        p_values = {}
+        r_squared = {}
+        
+        for feature in feature_cols:
+            if feature not in df.columns:
+                continue
+                
+            # Remove NaN values for analysis
+            valid_data = df[[feature, target]].dropna()
             
-            if not np.isnan(p1) and not np.isnan(p2):
-                # Cohen's h = 2 * arcsin(sqrt(p1)) - 2 * arcsin(sqrt(p2))
-                h = 2 * (np.arcsin(np.sqrt(p1)) - np.arcsin(np.sqrt(p2)))
-            else:
-                h = np.nan
+            if len(valid_data) < 5:  # Skip if too few valid data points
+                continue
                 
-            # Categorize effect size
-            if np.isnan(h):
-                effect_category = 'Unknown'
-            elif abs(h) < 0.2:
-                effect_category = 'Negligible'
-            elif abs(h) < 0.5:
-                effect_category = 'Small'
-            elif abs(h) < 0.8:
-                effect_category = 'Medium'
-            else:
-                effect_category = 'Large'
-                
-            effect_sizes.append({
-                'feature': feature,
-                'context': context,
-                'odds_ratio': odds_ratio,
-                'p_value': p_value,
-                'effect_size': h,
-                'effect_category': effect_category
-            })
+            # Pearson correlation
+            corr, p_val = stats.pearsonr(valid_data[feature], valid_data[target])
+            corr_results[feature] = corr
+            p_values[feature] = p_val
+            
+            # Calculate R-squared using simple linear regression
+            X = valid_data[feature].values.reshape(-1, 1)
+            y = valid_data[target].values
+            
+            model = LinearRegression()
+            model.fit(X, y)
+            y_pred = model.predict(X)
+            r2 = r2_score(y, y_pred)
+            r_squared[feature] = r2
+            
+        stats_dict['correlations'][target] = corr_results
+        stats_dict['significance'][target] = p_values
+        stats_dict['r_squared'][target] = r_squared
     
-    return pd.DataFrame(effect_sizes)
+    # Add correction for multiple testing
+    stats_dict['adjusted_significance'] = {}
+    
+    for target in target_cols:
+        if target not in stats_dict['significance']:
+            continue
+            
+        p_values = stats_dict['significance'][target]
+        if not p_values:
+            continue
+            
+        # Benjamini-Hochberg correction
+        sorted_p = sorted([(feat, p) for feat, p in p_values.items()], key=lambda x: x[1])
+        m = len(sorted_p)
+        
+        adjusted_p = {}
+        for i, (feature, p) in enumerate(sorted_p):
+            # BH adjustment formula
+            adjusted_p[feature] = min(p * m / (i + 1), 1.0)
+            
+        stats_dict['adjusted_significance'][target] = adjusted_p
+    
+    return stats_dict
 
 
-def apply_multiple_testing_correction(effect_sizes_df, method='fdr_bh'):
+def run_permutation_test(df, feature, target, n_permutations=1000):
     """
-    Apply multiple testing correction to p-values.
+    Perform permutation test to assess significance of correlation.
     
     Parameters:
     -----------
-    effect_sizes_df : pd.DataFrame
-        DataFrame with effect sizes and p-values
-    method : str
-        Multiple testing correction method
+    df : pandas.DataFrame
+        DataFrame containing feature and target variables
+    feature : str
+        Feature column name
+    target : str
+        Target column name
+    n_permutations : int, default=1000
+        Number of permutations
         
     Returns:
     --------
-    pd.DataFrame
-        DataFrame with corrected p-values
+    result : dict
+        Dictionary with permutation test results
     """
-    # Extract p-values
-    p_values = effect_sizes_df['p_value'].values
+    # Remove NaN values
+    valid_data = df[[feature, target]].dropna()
     
-    # Apply correction
-    reject, p_corrected, _, _ = multipletests(p_values, method=method)
+    if len(valid_data) < 10:
+        return {
+            'error': 'Not enough valid data points for permutation test',
+            'feature': feature,
+            'target': target
+        }
     
-    # Add to DataFrame
-    df_corrected = effect_sizes_df.copy()
-    df_corrected['p_corrected'] = p_corrected
-    df_corrected['significant'] = reject
+    # Calculate observed correlation
+    observed_corr, _ = stats.pearsonr(valid_data[feature], valid_data[target])
     
-    return df_corrected
-
-
-def create_context_profile(features_df, context_cols):
-    """
-    Create a profile of audio contexts over time.
+    # Permutation test
+    permutation_corrs = []
     
-    Parameters:
-    -----------
-    features_df : pd.DataFrame
-        DataFrame with features and context classifications
-    context_cols : list
-        List of context column names
-        
-    Returns:
-    --------
-    pd.DataFrame
-        DataFrame with context profiles over time
-    """
-    # Extract time and context columns
-    time_cols = ['window_start', 'window_end']
-    profile_df = features_df[time_cols + context_cols].copy()
-    
-    # Add window index
-    profile_df['window_idx'] = range(len(profile_df))
-    
-    return profile_df
-
-
-def summarize_significant_contexts(corrected_results):
-    """
-    Summarize significant context-synchronization relationships.
-    
-    Parameters:
-    -----------
-    corrected_results : pd.DataFrame
-        DataFrame with corrected p-values and significance flags
-        
-    Returns:
-    --------
-    pd.DataFrame
-        DataFrame with significant results sorted by effect size
-    """
-    # Filter for significant results
-    sig_results = corrected_results[corrected_results['significant']].copy()
-    
-    # Sort by absolute effect size
-    sig_results['abs_effect'] = np.abs(sig_results['effect_size'])
-    sig_results = sig_results.sort_values('abs_effect', ascending=False)
-    
-    return sig_results
-
-
-def permutation_test(context_df, sync_series, context_col, n_permutations=1000):
-    """
-    Perform permutation test to validate context-synchronization relationships.
-    
-    Parameters:
-    -----------
-    context_df : pd.DataFrame
-        DataFrame with context classifications
-    sync_series : pd.Series
-        Binary synchronization series
-    context_col : str
-        Name of the context column
-    n_permutations : int
-        Number of permutations to perform
-        
-    Returns:
-    --------
-    tuple
-        (observed_diff, p_value)
-    """
-    # Get original difference in synchronization probabilities
-    df = pd.DataFrame({
-        'context': context_df[context_col],
-        'sync': sync_series.reset_index(drop=True)
-    })
-    
-    context_present = df[df['context'] == 1]['sync'].mean()
-    context_absent = df[df['context'] == 0]['sync'].mean()
-    observed_diff = context_present - context_absent
-    
-    # Perform permutation test
-    permuted_diffs = []
     for _ in range(n_permutations):
-        # Shuffle synchronization labels
-        shuffled_sync = np.random.permutation(df['sync'].values)
+        # Shuffle the target variable
+        shuffled_target = np.random.permutation(valid_data[target].values)
         
-        # Calculate difference with shuffled data
-        present_mean = shuffled_sync[df['context'] == 1].mean()
-        absent_mean = shuffled_sync[df['context'] == 0].mean()
-        permuted_diffs.append(present_mean - absent_mean)
+        # Calculate correlation with shuffled data
+        perm_corr, _ = stats.pearsonr(valid_data[feature], shuffled_target)
+        permutation_corrs.append(perm_corr)
     
     # Calculate p-value
-    p_value = np.mean(np.abs(permuted_diffs) >= np.abs(observed_diff))
+    p_value = np.mean(np.abs(permutation_corrs) >= np.abs(observed_corr))
     
-    return observed_diff, p_value
+    # Calculate 95% confidence interval
+    ci_lower = np.percentile(permutation_corrs, 2.5)
+    ci_upper = np.percentile(permutation_corrs, 97.5)
+    
+    return {
+        'feature': feature,
+        'target': target,
+        'observed_correlation': observed_corr,
+        'permutation_correlations': permutation_corrs,
+        'p_value': p_value,
+        'confidence_interval': (ci_lower, ci_upper),
+        'significant': p_value < 0.05,
+        'n_permutations': n_permutations
+    }
 
 
-def perform_cross_validation(features_df, context_col, sync_feature, test_size=0.3):
+def run_cross_validation(df, feature_cols, target, k_folds=5):
     """
-    Perform cross-validation to verify if context-synchronization relationships generalize.
+    Perform cross-validation to assess prediction stability.
     
     Parameters:
     -----------
-    features_df : pd.DataFrame
-        DataFrame with features and synchronization
-    context_col : str
-        Name of the context column
-    sync_feature : str
-        Name of the synchronization feature
-    test_size : float
-        Proportion of data to use for testing
+    df : pandas.DataFrame
+        DataFrame containing features and target variable
+    feature_cols : list
+        List of feature column names
+    target : str
+        Target column name
+    k_folds : int, default=5
+        Number of folds for cross-validation
         
     Returns:
     --------
-    tuple
-        (train_diff, test_diff, generalizes)
+    result : dict
+        Dictionary with cross-validation results
     """
+    # Check if enough data for k-fold
+    if len(df) < k_folds * 2:
+        return {
+            'error': f'Not enough data points for {k_folds}-fold cross-validation',
+            'features': feature_cols,
+            'target': target
+        }
+    
+    # Remove rows with NaN in relevant columns
+    valid_data = df[feature_cols + [target]].dropna()
+    
+    if len(valid_data) < k_folds * 2:
+        return {
+            'error': f'Not enough valid data points for {k_folds}-fold cross-validation after removing NaN',
+            'features': feature_cols,
+            'target': target
+        }
+    
     # Prepare data
-    df = features_df[[context_col, sync_feature]].dropna()
+    X = valid_data[feature_cols].values
+    y = valid_data[target].values
     
-    # Randomly split data
-    np.random.seed(42)
-    mask = np.random.rand(len(df)) >= test_size
-    train = df[mask]
-    test = df[~mask]
+    # Initialize k-fold cross-validation
+    kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
     
-    # Calculate differences in training set
-    train_present = train[train[context_col] == 1][sync_feature].mean()
-    train_absent = train[train[context_col] == 0][sync_feature].mean()
-    train_diff = train_present - train_absent
+    # Metrics for each fold
+    r2_scores = []
+    mse_scores = []
+    feature_importances = []
     
-    # Calculate differences in test set
-    test_present = test[test[context_col] == 1][sync_feature].mean()
-    test_absent = test[test[context_col] == 0][sync_feature].mean()
-    test_diff = test_present - test_absent
+    # Perform cross-validation
+    for train_idx, test_idx in kf.split(X):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+        
+        # Train model
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+        
+        # Predict and evaluate
+        y_pred = model.predict(X_test)
+        r2 = r2_score(y_test, y_pred)
+        mse = mean_squared_error(y_test, y_pred)
+        
+        r2_scores.append(r2)
+        mse_scores.append(mse)
+        
+        # Store feature coefficients
+        feature_importances.append(model.coef_)
     
-    # Check if relationship generalizes
-    # It generalizes if the sign of the effect is the same
-    generalizes = (train_diff * test_diff) > 0
+    # Calculate feature importance stability
+    feature_importance_df = pd.DataFrame(feature_importances, columns=feature_cols)
+    feature_stability = {
+        col: {
+            'mean': feature_importance_df[col].mean(),
+            'std': feature_importance_df[col].std(),
+            'cv': np.abs(feature_importance_df[col].std() / (feature_importance_df[col].mean() + 1e-10))
+        }
+        for col in feature_cols
+    }
     
-    return train_diff, test_diff, generalizes
+    # Return results
+    return {
+        'features': feature_cols,
+        'target': target,
+        'r2_scores': r2_scores,
+        'mean_r2': np.mean(r2_scores),
+        'std_r2': np.std(r2_scores),
+        'mse_scores': mse_scores,
+        'mean_mse': np.mean(mse_scores),
+        'std_mse': np.std(mse_scores),
+        'feature_importance': feature_stability,
+        'k_folds': k_folds
+    }
 
 
-def sensitivity_analysis(features_df, window_sizes, sync_thresholds, context_col, hr_feature):
+def calculate_effect_sizes(df, feature_cols, target_cols):
     """
-    Perform sensitivity analysis by varying window size and synchronization thresholds.
+    Calculate effect sizes for relationships between features and targets.
     
     Parameters:
     -----------
-    features_df : pd.DataFrame
-        DataFrame with features
-    window_sizes : list
-        List of window sizes to test
-    sync_thresholds : list
-        List of synchronization thresholds to test
-    context_col : str
-        Name of the context column
-    hr_feature : str
-        Name of the heart rate feature
+    df : pandas.DataFrame
+        DataFrame containing features and target variables
+    feature_cols : list
+        List of feature column names
+    target_cols : list
+        List of target column names
         
     Returns:
     --------
-    pd.DataFrame
-        DataFrame with sensitivity analysis results
+    effect_sizes : dict
+        Dictionary with effect size calculations
     """
-    from src.synchronization import calculate_windowwise_correlation, binary_synchronization
+    effect_sizes = {}
     
-    results = []
-    
-    # Define heart rate features
-    hr_features = [hr_feature]  # Only analyze one feature for sensitivity
-    
-    for window_size in window_sizes:
-        # Recalculate window-wise correlation with different window size
-        window_corr = calculate_windowwise_correlation(features_df, hr_features, window_size)
+    for target in target_cols:
+        if target not in df.columns:
+            continue
+            
+        target_effects = {}
         
-        for threshold in sync_thresholds:
-            # Recalculate binary synchronization with different threshold
-            binary_sync = binary_synchronization(window_corr, hr_feature, threshold)
+        for feature in feature_cols:
+            if feature not in df.columns:
+                continue
+                
+            # Remove NaN values
+            valid_data = df[[feature, target]].dropna()
             
-            # Calculate synchronization probabilities
-            probs = calculate_sync_probability_by_context(features_df, binary_sync, context_col)
+            if len(valid_data) < 10:
+                continue
+                
+            # Calculate Cohen's d
+            group1 = valid_data[valid_data[feature] > valid_data[feature].median()][target]
+            group2 = valid_data[valid_data[feature] <= valid_data[feature].median()][target]
             
-            if probs[0] is not None:
-                results.append({
-                    'window_size': window_size,
-                    'threshold': threshold,
-                    'sync_prob_context_present': probs[0],
-                    'sync_prob_context_absent': probs[1],
-                    'odds_ratio': probs[2],
-                    'p_value': probs[3]
-                })
+            # Pooled standard deviation
+            n1, n2 = len(group1), len(group2)
+            s1, s2 = group1.std(), group2.std()
+            
+            # Avoid division by zero
+            if s1 == 0 and s2 == 0:
+                pooled_std = 1e-10
+            else:
+                pooled_std = np.sqrt(((n1 - 1) * s1**2 + (n2 - 1) * s2**2) / (n1 + n2 - 2))
+            
+            # Cohen's d
+            d = (group1.mean() - group2.mean()) / pooled_std
+            
+            # Calculate r-squared from correlation
+            corr, _ = stats.pearsonr(valid_data[feature], valid_data[target])
+            r_squared = corr**2
+            
+            target_effects[feature] = {
+                'cohens_d': d,
+                'r_squared': r_squared,
+                'correlation': corr,
+                'sample_size': len(valid_data)
+            }
+            
+        effect_sizes[target] = target_effects
     
-    return pd.DataFrame(results) 
+    return effect_sizes
+
+
+def analyze_time_lag_correlations(df, feature_col, target_col, max_lag=10):
+    """
+    Analyze correlations between a feature and target at different time lags.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing feature and target variables
+    feature_col : str
+        Feature column name
+    target_col : str
+        Target column name
+    max_lag : int, default=10
+        Maximum lag to analyze
+        
+    Returns:
+    --------
+    lag_results : dict
+        Dictionary with time lag correlation results
+    """
+    if feature_col not in df.columns or target_col not in df.columns:
+        return {
+            'error': 'Feature or target column not found in DataFrame',
+            'feature': feature_col,
+            'target': target_col
+        }
+    
+    # Extract series
+    feature_series = df[feature_col].dropna()
+    target_series = df[target_col].dropna()
+    
+    # Ensure same index
+    common_idx = feature_series.index.intersection(target_series.index)
+    feature_series = feature_series.loc[common_idx]
+    target_series = target_series.loc[common_idx]
+    
+    if len(feature_series) < max_lag * 2:
+        return {
+            'error': 'Not enough data points for lag analysis',
+            'feature': feature_col,
+            'target': target_col
+        }
+    
+    # Calculate correlations at different lags
+    lag_correlations = {}
+    
+    for lag in range(-max_lag, max_lag + 1):
+        if lag < 0:
+            # Feature leads target (shift target forward)
+            shifted_target = target_series.shift(-lag)
+            valid_data = pd.DataFrame({
+                'feature': feature_series,
+                'target': shifted_target
+            }).dropna()
+        elif lag > 0:
+            # Target leads feature (shift feature forward)
+            shifted_feature = feature_series.shift(lag)
+            valid_data = pd.DataFrame({
+                'feature': shifted_feature,
+                'target': target_series
+            }).dropna()
+        else:
+            # No lag
+            valid_data = pd.DataFrame({
+                'feature': feature_series,
+                'target': target_series
+            }).dropna()
+        
+        if len(valid_data) < 10:
+            lag_correlations[lag] = np.nan
+            continue
+        
+        # Calculate correlation
+        corr, p_value = stats.pearsonr(valid_data['feature'], valid_data['target'])
+        lag_correlations[lag] = corr
+    
+    # Find optimal lag (maximum absolute correlation)
+    valid_lags = {lag: corr for lag, corr in lag_correlations.items() 
+                 if not np.isnan(corr)}
+    
+    if not valid_lags:
+        optimal_lag = 0
+        max_correlation = np.nan
+    else:
+        optimal_lag = max(valid_lags.items(), key=lambda x: abs(x[1]))[0]
+        max_correlation = valid_lags[optimal_lag]
+    
+    return {
+        'feature': feature_col,
+        'target': target_col,
+        'lag_correlations': lag_correlations,
+        'optimal_lag': optimal_lag,
+        'max_correlation': max_correlation
+    }
+
+
+def run_feature_importance_analysis(df, feature_cols, target_col):
+    """
+    Perform feature importance analysis for predicting a target variable.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        DataFrame containing features and target variable
+    feature_cols : list
+        List of feature column names
+    target_col : str
+        Target column name
+        
+    Returns:
+    --------
+    importance_results : dict
+        Dictionary with feature importance results
+    """
+    # Remove rows with NaN in relevant columns
+    valid_data = df[feature_cols + [target_col]].dropna()
+    
+    if len(valid_data) < 10:
+        return {
+            'error': 'Not enough valid data points for feature importance analysis',
+            'features': feature_cols,
+            'target': target_col
+        }
+    
+    # Initialize results dictionary
+    importance_results = {
+        'features': feature_cols,
+        'target': target_col,
+        'univariate_importance': {},
+        'multivariate_importance': {},
+        'correlation_matrix': {}
+    }
+    
+    # Calculate univariate correlations
+    for feature in feature_cols:
+        corr, p_val = stats.pearsonr(valid_data[feature], valid_data[target_col])
+        importance_results['univariate_importance'][feature] = {
+            'correlation': corr,
+            'p_value': p_val,
+            'r_squared': corr**2
+        }
+    
+    # Prepare data for multivariate analysis
+    X = valid_data[feature_cols].values
+    y = valid_data[target_col].values
+    
+    # Calculate correlation matrix between features
+    corr_matrix = valid_data[feature_cols].corr()
+    importance_results['correlation_matrix'] = corr_matrix.to_dict()
+    
+    # Calculate multivariate feature importance using linear regression
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # Store coefficients and calculate importance scores
+    for i, feature in enumerate(feature_cols):
+        importance_results['multivariate_importance'][feature] = {
+            'coefficient': model.coef_[i],
+            'abs_coefficient': abs(model.coef_[i])
+        }
+    
+    # Add model performance metrics
+    y_pred = model.predict(X)
+    importance_results['model_performance'] = {
+        'r_squared': r2_score(y, y_pred),
+        'mse': mean_squared_error(y, y_pred),
+        'intercept': model.intercept_
+    }
+    
+    # Normalize feature importance
+    total_importance = sum(item['abs_coefficient'] 
+                          for item in importance_results['multivariate_importance'].values())
+    
+    if total_importance > 0:
+        for feature in feature_cols:
+            abs_coef = importance_results['multivariate_importance'][feature]['abs_coefficient']
+            importance_results['multivariate_importance'][feature]['normalized_importance'] = abs_coef / total_importance
+    
+    return importance_results 

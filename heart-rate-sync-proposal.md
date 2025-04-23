@@ -77,91 +77,76 @@ For each participant (p1, p2), extract the following features:
 
 For each audio window, extract:
 
-1. **RMS Energy (audio_energy):**
-   - Root Mean Square Energy, representing loudness
-   - Formula: `audio_energy = sqrt(mean(amplitude^2))`
+1. **Tempo/BPM (audio_tempo):**
+   - Musical tempo estimation in beats per minute
+   - Direct relationship with heart rate through entrainment
+   - Formula: Use beat tracking algorithms to detect rhythmic pulses
 
-2. **Zero-Crossing Rate (audio_zcr):**
-   - Rate at which the signal changes from positive to negative or vice versa
-   - Formula: `audio_zcr = (1/(N-1)) * sum(|sign(x[n]) - sign(x[n-1])|) / 2` for all n
+2. **Dominant Frequency (audio_dom_freq):**
+   - The frequency with the highest energy in the spectrum
+   - Indicates the main pitch or tonal center of the music
+   - Formula: `audio_dom_freq = frequency_bin_with_max_energy`
 
-3. **Spectral Centroid (audio_centroid):**
-   - Center of gravity of the spectrum; indicates brightness/sharpness
-   - Formula: `audio_centroid = sum(f[k] * X[k]) / sum(X[k])` where X[k] is the magnitude of bin k and f[k] is the center frequency of bin k
+3. **Spectral Contrast (audio_contrast):**
+   - Difference between peaks and valleys in the spectrum
+   - Distinguishes between "smooth" genres (lofi) and "harsh" genres (metal)
+   - Formula: Calculate the difference between spectral peaks and valleys
 
-4. **Spectral Flux (audio_flux):**
-   - How quickly the power spectrum changes from frame to frame
-   - Formula: `audio_flux = sum((X_t[k] - X_{t-1}[k])^2)` for all k
+4. **Timeseries Information Complexity (audio_complexity):**
+   - Quantifies the complexity/unpredictability of the audio signal
+   - Implemented as spectral entropy
+   - Formula: `audio_complexity = -sum(P(f) * log2(P(f)))` where P(f) is normalized power at frequency f
 
-5. **Voice Activity Ratio (audio_voice_ratio):**
-   - Proportion of frames containing human voice
-   - Implementation: Use a simple voice activity detector (VAD) based on energy and zero-crossing rate thresholds
-   - Formula: `audio_voice_ratio = (number_of_voice_frames / total_frames)`
+5. **Dynamic Range (audio_dynamic_range):**
+   - Ratio between the loudest and quietest parts
+   - Captures the intensity of dynamic changes that can trigger arousal
+   - Formula: `audio_dynamic_range = 20 * log10(max_energy / min_energy)` in dB
 
-### 2.4 Synchronization Analysis
+### 2.4 Audio Feature Analysis
 
-#### 2.4.1 Pairwise Correlation
-For each heart rate feature and each 30-second window:
-1. Calculate Pearson correlation coefficient between participant 1 and participant 2
-2. Formula: `r = cov(p1_feature, p2_feature) / (std(p1_feature) * std(p2_feature))`
+We will analyze the relationship between continuous audio features and heart rate synchronization:
 
-#### 2.4.2 Synchronization Definition
-1. **Binary Synchronization:**
-   - Define a threshold for each feature (e.g., r > 0.6)
-   - Mark windows as "synchronized" or "not synchronized" based on threshold
-   - Create a binary time series: sync_binary[window] = 1 if synchronized, 0 if not
+1. **Tempo/BPM (audio_tempo):**
+   - Musical tempo estimation in beats per minute
+   - Direct relationship with heart rate through entrainment
+   - Formula: Use beat tracking algorithms to detect rhythmic pulses
 
-2. **Weighted Synchronization:**
-   - Use the actual correlation coefficient as a continuous measure of synchronization strength
-   - Create a continuous time series: sync_strength[window] = correlation_coefficient
+2. **Dominant Frequency (audio_dom_freq):**
+   - The frequency with the highest energy in the spectrum
+   - Indicates the main pitch or tonal center of the music
+   - Formula: `audio_dom_freq = frequency_bin_with_max_energy`
 
-### 2.5 Context Classification
+3. **Spectral Contrast (audio_contrast):**
+   - Difference between peaks and valleys in the spectrum
+   - Distinguishes between "smooth" genres (lofi) and "harsh" genres (metal)
+   - Formula: Calculate the difference between spectral peaks and valleys
 
-#### 2.5.1 Audio Context Categories
-Define the following binary categories based on the 5 audio features:
+4. **Timeseries Information Complexity (audio_complexity):**
+   - Quantifies the complexity/unpredictability of the audio signal
+   - Implemented as spectral entropy
+   - Formula: `audio_complexity = -sum(P(f) * log2(P(f)))` where P(f) is normalized power at frequency f
 
-1. **Loudness Context:**
-   - "Quiet" if audio_energy < energy_threshold
-   - "Loud" if audio_energy ≥ energy_threshold
-   - Determine energy_threshold adaptively based on distribution (e.g., median)
+5. **Dynamic Range (audio_dynamic_range):**
+   - Ratio between the loudest and quietest parts
+   - Captures the intensity of dynamic changes that can trigger arousal
+   - Formula: `audio_dynamic_range = 20 * log10(max_energy / min_energy)` in dB
 
-2. **Frequency Content Context:**
-   - "Low Frequency Dominant" if audio_centroid < centroid_threshold
-   - "High Frequency Dominant" if audio_centroid ≥ centroid_threshold
-   - Determine centroid_threshold based on distribution
+To facilitate statistical analysis, we may also calculate z-scored versions of these features to allow for standardized comparisons.
 
-3. **Stability Context:**
-   - "Steady" if audio_flux < flux_threshold
-   - "Changing" if audio_flux ≥ flux_threshold
-   - Determine flux_threshold based on distribution
+### 2.5 Feature-Synchronization Analysis
 
-4. **Voice Context:**
-   - "Voice Present" if audio_voice_ratio ≥ voice_threshold (e.g., 0.3)
-   - "Voice Absent" if audio_voice_ratio < voice_threshold
+#### 2.5.1 Direct Correlation
+1. Calculate Pearson correlation between each audio feature and synchronization measures
+2. Formula: `r = cov(audio_feature, synchronization) / (std(audio_feature) * std(synchronization))`
+3. Analyze significance and strength of correlations
 
-5. **Complexity Context:**
-   - "Simple" if audio_zcr < zcr_threshold
-   - "Complex" if audio_zcr ≥ zcr_threshold
-   - Determine zcr_threshold based on distribution
+#### 2.5.2 Statistical Testing
+1. Pearson correlation between continuous audio features and continuous synchronization measures
+2. Multiple regression to assess combined effects of audio features on synchronization
+3. Permutation tests to assess statistical significance
 
-#### 2.5.2 Multi-dimensional Context
-- Create compound contexts by combining binary categories
-- Example: "Quiet + Voice Present + Steady" vs. "Loud + Voice Absent + Changing"
-
-### 2.6 Context-Synchronization Analysis
-
-#### 2.6.1 Direct Association
-1. Calculate the proportion of synchronized windows within each context category
-2. Formula: `P(sync|context) = count(sync=1 & context) / count(context)`
-3. Compare proportions between contexts to identify conditions with higher synchronization
-
-#### 2.6.2 Statistical Testing
-1. Chi-square test for independence between context categories and synchronization
-2. Point-biserial correlation between continuous audio features and binary synchronization
-3. Pearson correlation between continuous audio features and synchronization strength
-
-#### 2.6.3 Time-lag Analysis
-1. Test for temporal precedence (does context change precede synchronization?)
+#### 2.5.3 Time-lag Analysis
+1. Test for temporal precedence (does feature change precede synchronization?)
 2. Cross-correlation with varying lags (e.g., -3 to +3 windows)
 3. Identify the lag with maximum correlation for each audio feature
 

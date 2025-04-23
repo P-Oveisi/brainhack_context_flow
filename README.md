@@ -1,138 +1,126 @@
 # Heart Rate Synchronization Analysis
 
-This project analyzes the relationship between environmental audio context and heart rate synchronization between two individuals (dyads).
+This project analyzes heart rate synchronization between pairs of participants during conversations, examining how audio features correlate with synchronization patterns.
 
-## Project Overview
+## Overview
 
-The primary research question is: **Under what environmental audio contexts does heart rate synchronization appear between two people?**
+This codebase provides tools to analyze how continuous audio features in conversation (such as pitch, intensity, speech rate) relate to heart rate synchronization between participants. The analysis pipeline includes:
 
-This analysis pipeline processes heart rate data from two participants along with environmental audio recordings to identify patterns of physiological synchrony and correlate them with acoustic features to determine under what contexts synchronization is most likely to occur.
-
-## Requirements
-
-### Dependencies
-
-Install all required packages:
-
-```bash
-pip install numpy pandas scipy matplotlib seaborn librosa scikit-learn statsmodels
-```
-
-### Data Format
-
-1. **Heart Rate Data**
-   - CSV files with at least 'timestamp' and 'heart_rate' columns
-   - Timestamp should be in UNIX time (seconds since epoch)
-   - Heart rate in beats per minute (BPM)
-
-2. **Audio Data**
-   - Common audio format (WAV, MP3)
-   - The audio recording should temporally align with the heart rate data
+1. **Preprocessing** heart rate data from multiple participants
+2. **Feature extraction** from audio recordings
+3. **Synchronization calculation** between participants' heart rates
+4. **Correlation analysis** between audio features and synchronization
+5. **Visualization** of results through various plots
+6. **Statistical analysis** to validate findings
 
 ## Project Structure
 
 ```
-.
-├── data/
-│   ├── raw/                  # Raw data files
-│   ├── processed/            # Preprocessed data
-│   ├── features/             # Extracted features
-│   └── results/              # Analysis results and figures
-├── src/
-│   ├── preprocess.py         # Data preprocessing
-│   ├── features.py           # Feature extraction
-│   ├── synchronization.py    # Synchronization analysis
-│   ├── context.py            # Context classification
-│   ├── analysis.py           # Context-synchronization analysis
-│   └── visualize.py          # Visualization functions
-├── logs/                     # Log files
-├── config.py                 # Configuration parameters
-├── main.py                   # Main execution script
-└── README.md                 # This file
+project/
+├── data/                # Raw and processed data
+├── results/             # Output results and visualizations
+├── src/                 # Source code
+│   ├── preprocess.py    # Heart rate data preprocessing
+│   ├── features.py      # Audio feature extraction
+│   ├── synchronization.py # Heart rate synchronization calculation
+│   ├── context.py       # Analysis of audio features
+│   ├── visualize.py     # Visualization functions
+│   ├── analysis.py      # Statistical analysis functions
+│   └── explore.py       # Exploration script
+└── README.md            # This file
 ```
+
+## Key Components
+
+### Preprocessing
+- Cleans and processes raw heart rate data
+- Handles missing values and aligns time series
+- Segments data into analysis windows
+
+### Feature Extraction
+- Extracts audio features from conversation recordings
+- Includes acoustic features like pitch, intensity, and speech rate
+- Aligns features with heart rate data windows
+
+### Synchronization
+- Calculates correlation-based synchronization between participants' heart rates
+- Offers multiple metrics (mean, standard deviation, min, max)
+- Supports windowed analysis for time-based patterns
+
+### Context Analysis
+- Analyzes relationships between audio features and synchronization
+- Includes correlation analysis and statistical validation
+- Identifies significant audio features that predict synchronization
+
+### Visualization
+- Creates timeline plots showing heart rates and synchronization
+- Generates correlation heatmaps between features and synchronization
+- Produces bar charts with correlation values and confidence intervals
+- Visualizes audio feature profiles over time
+
+### Statistical Analysis
+- Performs statistical tests to validate findings
+- Includes permutation tests, cross-validation, and sensitivity analysis
+- Calculates effect sizes and applies multiple testing correction
 
 ## Usage
 
-Run the complete analysis pipeline:
+### Data Format
+The system expects heart rate data for each participant in CSV format with timestamps. Audio features should be extracted and stored in a pickled DataFrame.
 
-```bash
-python main.py --hr1 [path_to_participant1_heart_rate_file] --hr2 [path_to_participant2_heart_rate_file] --audio [path_to_audio_file]
-```
+### Example Workflow
 
-Optional flags:
-- `--skip-validation`: Skip validation analyses (permutation tests, cross-validation, sensitivity analysis)
+1. **Preprocess heart rate data**:
+   ```python
+   from src.preprocess import preprocess_heart_rate_data
+   p1_data = preprocess_heart_rate_data('data/p1_raw.csv')
+   p2_data = preprocess_heart_rate_data('data/p2_raw.csv')
+   ```
 
-Example:
-```bash
-python main.py --hr1 data/raw/participant1_hr.csv --hr2 data/raw/participant2_hr.csv --audio data/raw/session_audio.wav
-```
+2. **Extract audio features**:
+   ```python
+   from src.features import extract_audio_features
+   features_df = extract_audio_features('data/audio.wav', window_size=30)
+   ```
 
-## Analysis Pipeline
+3. **Calculate synchronization**:
+   ```python
+   from src.synchronization import calculate_windowwise_correlation, continuous_synchronization
+   window_corr = calculate_windowwise_correlation(features_df, ['hr_mean', 'hr_std'])
+   sync_results = continuous_synchronization(window_corr, ['hr_mean', 'hr_std'])
+   ```
 
-1. **Data Preprocessing**
-   - Clean heart rate data (remove outliers, interpolate missing values)
-   - Normalize and filter audio data
-   - Segment data into 30-second non-overlapping windows
+4. **Run correlation analysis**:
+   ```python
+   from src.context import analyze_feature_synchronization
+   feature_sync_results = analyze_feature_synchronization(features_df, sync_results)
+   ```
 
-2. **Feature Extraction**
-   - Heart Rate Features: mean, standard deviation, trend, max delta, RMSSD
-   - Audio Features: energy, zero-crossing rate, spectral centroid, spectral flux, voice activity ratio
+5. **Visualize results**:
+   ```python
+   from src.visualize import plot_correlation_heatmap
+   plot_correlation_heatmap(feature_sync_results)
+   ```
 
-3. **Synchronization Analysis**
-   - Calculate correlation between participants for each heart rate feature
-   - Define binary synchronization based on correlation thresholds
-   - Analyze time-lagged correlations
+6. **Run exploration script**:
+   ```
+   python -m src.explore --session session1
+   ```
 
-4. **Context Classification**
-   - Classify audio into binary contexts: loud/quiet, high/low frequency, changing/steady, voice present/absent, complex/simple
-   - Create compound contexts by combining binary categories
+## Requirements
 
-5. **Context-Synchronization Analysis**
-   - Analyze relationships between audio contexts and heart rate synchronization
-   - Calculate effect sizes and apply multiple testing correction
-   - Identify significant context-synchronization associations
+- Python 3.8+
+- pandas
+- numpy
+- matplotlib
+- scipy
+- scikit-learn
 
-6. **Visualization**
-   - Timeline plots of heart rates and synchronization
-   - Context-synchronization heatmaps
-   - Effect size bar charts
-   - Context profile timelines
+## Contribution
 
-7. **Validation**
-   - Permutation testing
-   - Cross-validation
-   - Sensitivity analysis
-
-## Results
-
-Analysis results are saved in the `data/results/` directory:
-- CSV files with statistical results
-- Visualizations in the `data/results/plots/` directory
-- Logs of the analysis process in the `logs/` directory
-
-## Configuration
-
-Adjust parameters in `config.py` to customize the analysis:
-- Data processing parameters (window size, sample rates)
-- Feature extraction parameters
-- Synchronization thresholds
-- Statistical analysis settings
-- Visualization options
-
-## License
-
-This project is licensed under the MIT License.
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```
-@misc{heart-rate-sync,
-  author = {Your Name},
-  title = {Heart Rate Synchronization Analysis},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/yourusername/heart-rate-sync}
-}
-``` 
+Contributions are welcome! Please follow these steps:
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request 
