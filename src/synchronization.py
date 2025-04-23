@@ -178,50 +178,82 @@ def calculate_time_lag_correlation(features_df, hr_feature, max_lag=3):
     return opt_lag, max_corr
 
 
-def analyze_synchronization(features_df):
+def calculate_feature_correlation(feature1, feature2):
     """
-    Analyze heart rate synchronization between participants.
+    Calculate correlation between two heart rate features.
+    
+    Parameters:
+    -----------
+    feature1 : pd.Series
+        Heart rate feature values for participant 1
+    feature2 : pd.Series
+        Heart rate feature values for participant 2
+        
+    Returns:
+    --------
+    float
+        Correlation coefficient
+    """
+    # Calculate Pearson correlation
+    if len(feature1) != len(feature2):
+        raise ValueError("Feature series must have the same length")
+        
+    if len(feature1) < 2 or len(feature2) < 2:
+        return np.nan
+        
+    correlation = np.corrcoef(feature1, feature2)[0, 1]
+    
+    return correlation
+
+
+def calculate_synchronization(features_df):
+    """
+    Calculate synchronization between heart rate features of two participants.
     
     Parameters:
     -----------
     features_df : pd.DataFrame
-        DataFrame with features for both participants
+        DataFrame with heart rate features for both participants
         
     Returns:
     --------
     dict
         Dictionary with synchronization results
     """
-    # Define heart rate features
-    hr_features = ['hr_mean', 'hr_std', 'hr_trend', 'hr_max_delta', 'rmssd']
+    # Get available heart rate features
+    p1_features = [col for col in features_df.columns if col.startswith('p1_')]
+    p2_features = [col for col in features_df.columns if col.startswith('p2_')]
     
-    # Calculate overall correlation
-    overall_corr = calculate_pearson_correlation(features_df, hr_features)
+    # Extract features without prefix
+    hr_features = [f.replace('p1_', '') for f in p1_features]
     
-    # Calculate window-wise correlation
-    window_corr = calculate_windowwise_correlation(features_df, hr_features)
+    # Calculate window-by-window correlation
+    window_correlations = pd.DataFrame(index=features_df['window_start'])
     
-    # Calculate binary synchronization for each feature
-    binary_sync = {}
     for feature in hr_features:
-        if f'corr_{feature}' in window_corr.columns:
-            binary_sync[feature] = binary_synchronization(window_corr, feature)
+        p1_feature = f'p1_{feature}'
+        p2_feature = f'p2_{feature}'
+        
+        if p1_feature in features_df.columns and p2_feature in features_df.columns:
+            window_correlations[feature] = calculate_feature_correlation(
+                features_df[p1_feature],
+                features_df[p2_feature]
+            )
     
-    # Calculate time lag correlations
+    # Calculate time-lag correlations
     lag_results = {}
     for feature in hr_features:
-        opt_lag, max_corr = calculate_time_lag_correlation(features_df, feature)
-        if opt_lag is not None:
-            lag_results[feature] = {
-                'optimum_lag': opt_lag,
-                'max_correlation': max_corr
-            }
+        p1_feature = f'p1_{feature}'
+        p2_feature = f'p2_{feature}'
+        
+        if p1_feature in features_df.columns and p2_feature in features_df.columns:
+            lag_results[feature] = calculate_lag_correlation(
+                features_df[p1_feature],
+                features_df[p2_feature],
+                max_lag=10  # Maximum lag in samples
+            )
     
-    results = {
-        'overall_correlation': overall_corr,
-        'window_correlation': window_corr,
-        'binary_synchronization': binary_sync,
+    return {
+        'window_correlations': window_correlations,
         'lag_results': lag_results
-    }
-    
-    return results 
+    } 

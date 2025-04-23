@@ -1,60 +1,55 @@
 """
-Heart Rate Synchronization Analysis - Main Script
+Heart Rate Synchronization - Main Execution Script
 
-This script runs the complete analysis pipeline for heart rate synchronization
-between two participants in relation to environmental audio context.
+This script coordinates the overall processing pipeline:
+1. Load and preprocess data
+2. Extract features
+3. Calculate synchronization
+4. Analyze features and synchronization
+5. Generate visualizations
 """
 
 import os
 import argparse
 import logging
-import pandas as pd
+import json
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# Import project modules
-from src.preprocess import preprocess_heart_rate, preprocess_audio, segment_data, align_multimodal_data
-from src.features import extract_all_features
-from src.synchronization import analyze_synchronization
-from src.context import classify_audio_contexts, create_multidimensional_contexts, analyze_context_synchronization
-from src.analysis import (compute_effect_sizes, apply_multiple_testing_correction, create_context_profile,
-                          summarize_significant_contexts, permutation_test, perform_cross_validation,
-                          sensitivity_analysis)
-from src.visualize import (plot_timeline, plot_context_heatmap, plot_effect_sizes,
-                           plot_context_profile, plot_lag_analysis, plot_sensitivity_heatmap)
-
-# Import configuration
 import config
+from src.preprocess import align_multimodal_data, segment_data
+from src.features import extract_all_features
+from src.synchronization import calculate_synchronization
+from src.context import prepare_audio_features, analyze_feature_synchronization, correlation_analysis
+from src.analysis import create_feature_profile, calculate_time_lag_correlations, run_cross_validation
+from src.visualize import (
+    plot_timeline, plot_correlation_heatmap, plot_correlation_values, 
+    plot_feature_profiles, plot_lag_analysis, plot_sensitivity_heatmap
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/heart_rate_sync.log'),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger(__name__)
 
 
-def setup_logging():
-    """Set up logging configuration."""
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_dir = 'logs'
-    os.makedirs(log_dir, exist_ok=True)
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(os.path.join(log_dir, f'analysis_{timestamp}.log')),
-            logging.StreamHandler()
-        ]
-    )
-    return logging.getLogger('heart_rate_sync')
-
-
-def ensure_directories():
-    """Ensure all required directories exist."""
-    for _, directory in config.DATA_CONFIG.items():
-        os.makedirs(directory, exist_ok=True)
-    
-    # Create results directory
-    os.makedirs(config.DATA_CONFIG['results_dir'], exist_ok=True)
-    
-    # Create plots directory inside results
-    os.makedirs(os.path.join(config.DATA_CONFIG['results_dir'], 'plots'), exist_ok=True)
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Heart Rate Synchronization Analysis')
+    parser.add_argument('--hr1', required=True, help='Path to heart rate file for participant 1')
+    parser.add_argument('--hr2', required=True, help='Path to heart rate file for participant 2')
+    parser.add_argument('--audio', required=True, help='Path to audio file')
+    parser.add_argument('--output', default='data/results', help='Output directory')
+    return parser.parse_args()
 
 
 def load_data(hr_file1, hr_file2, audio_file):
@@ -105,351 +100,245 @@ def load_data(hr_file1, hr_file2, audio_file):
 
 def run_analysis(features_df):
     """
-    Run the complete analysis pipeline.
+    Run the heart rate synchronization analysis.
     
     Parameters:
     -----------
     features_df : pd.DataFrame
-        DataFrame with all extracted features
+        DataFrame with features
         
     Returns:
     --------
     dict
         Dictionary with analysis results
     """
-    logger.info("Starting analysis...")
+    logger.info("Calculating synchronization...")
+    sync_results = calculate_synchronization(features_df)
     
-    # Step 1: Analyze synchronization
-    logger.info("Analyzing synchronization...")
-    sync_results = analyze_synchronization(features_df)
+    # Prepare audio features (normalization, etc.)
+    logger.info("Processing audio features...")
+    processed_features_df = prepare_audio_features(features_df)
     
-    # Step 2: Classify audio contexts
-    logger.info("Classifying audio contexts...")
-    context_df = classify_audio_contexts(features_df)
+    # Analyze feature-synchronization relationships
+    logger.info("Analyzing feature-synchronization relationships...")
+    feature_sync_results = analyze_feature_synchronization(processed_features_df, sync_results)
     
-    # Step 3: Create multi-dimensional contexts
-    multi_context_df = create_multidimensional_contexts(context_df)
+    # Calculate correlation between audio features and synchronization
+    logger.info("Calculating correlations...")
+    correlations_df = correlation_analysis(processed_features_df, sync_results['window_correlations'])
     
-    # Step 4: Analyze context-synchronization relationships
-    logger.info("Analyzing context-synchronization relationships...")
-    context_sync_results = analyze_context_synchronization(multi_context_df, sync_results)
-    
-    # Step 5: Compute effect sizes
-    logger.info("Computing effect sizes...")
-    effect_sizes_df = compute_effect_sizes(context_sync_results)
-    
-    # Step 6: Apply multiple testing correction
-    corrected_results = apply_multiple_testing_correction(
-        effect_sizes_df, 
-        method=config.STATS_CONFIG['multiple_testing_correction']
+    # Calculate time-lag correlations
+    logger.info("Calculating time-lag correlations...")
+    lag_results = calculate_time_lag_correlations(
+        processed_features_df, 
+        sync_results['window_correlations'],
+        max_lag=config.SYNC_CONFIG['max_lag']
     )
     
-    # Step 7: Summarize significant contexts
-    sig_results = summarize_significant_contexts(corrected_results)
-    
-    # Save results
-    results_path = os.path.join(config.DATA_CONFIG['results_dir'], 'analysis_results.csv')
-    corrected_results.to_csv(results_path, index=False)
-    
-    sig_results_path = os.path.join(config.DATA_CONFIG['results_dir'], 'significant_results.csv')
-    sig_results.to_csv(sig_results_path, index=False)
-    
-    logger.info(f"Analysis results saved to {results_path}")
-    
-    return {
+    # Save analysis results
+    results = {
         'sync_results': sync_results,
-        'context_df': multi_context_df,
-        'context_sync_results': context_sync_results,
-        'effect_sizes': corrected_results,
-        'significant_results': sig_results
+        'feature_sync_results': feature_sync_results,
+        'correlations': correlations_df.to_dict(orient='records'),
+        'lag_results': lag_results,
+        'features_df': processed_features_df,
     }
+    
+    return results
 
 
-def create_visualizations(features_df, analysis_results):
+def generate_visualizations(analysis_results, output_dir):
     """
-    Create visualizations of the analysis results.
+    Generate visualizations from analysis results.
     
     Parameters:
     -----------
-    features_df : pd.DataFrame
-        DataFrame with all extracted features
     analysis_results : dict
         Dictionary with analysis results
+    output_dir : str
+        Output directory for visualizations
     """
-    logger.info("Creating visualizations...")
+    logger.info("Generating visualizations...")
     
-    plots_dir = os.path.join(config.DATA_CONFIG['results_dir'], 'plots')
-    os.makedirs(plots_dir, exist_ok=True)
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
     
     # Extract results
     sync_results = analysis_results['sync_results']
-    context_df = analysis_results['context_df']
-    context_sync_results = analysis_results['context_sync_results']
-    effect_sizes = analysis_results['effect_sizes']
+    features_df = analysis_results['features_df']
+    window_corr = sync_results['window_correlations']
     
-    # Plot 1: Timeline for each heart rate feature
+    # 1. Timeline plot
     for hr_feature in config.FEATURE_CONFIG['heart_rate_features']:
-        logger.info(f"Creating timeline plot for {hr_feature}...")
+        fig = plot_timeline(
+            features_df, 
+            pd.DataFrame({'window_start': window_corr.index, f'corr_{hr_feature}': window_corr[hr_feature]}),
+            hr_feature=hr_feature,
+            figsize=config.VIZ_CONFIG['timeline_figsize']
+        )
         
-        # Check if feature exists in results
-        if hr_feature in sync_results['binary_synchronization']:
-            fig = plot_timeline(
-                features_df,
-                sync_results['window_correlation'],
-                sync_results['binary_synchronization'][hr_feature],
-                hr_feature=hr_feature,
-                figsize=config.VIZ_CONFIG['timeline_figsize']
-            )
-            
-            # Save plot
-            for fmt in config.VIZ_CONFIG['plot_formats']:
-                path = os.path.join(plots_dir, f'timeline_{hr_feature}.{fmt}')
-                fig.savefig(path, dpi=300, bbox_inches='tight')
-            plt.close(fig)
-    
-    # Plot 2: Context heatmap for each heart rate feature
-    for hr_feature in config.FEATURE_CONFIG['heart_rate_features']:
-        logger.info(f"Creating context heatmap for {hr_feature}...")
+        plt.savefig(os.path.join(output_dir, f'timeline_{hr_feature}.png'))
+        plt.close(fig)
         
-        if hr_feature in context_sync_results:
-            fig = plot_context_heatmap(
-                context_sync_results,
-                effect_sizes,
-                hr_feature,
-                figsize=config.VIZ_CONFIG['heatmap_figsize']
-            )
-            
-            if fig is not None:
-                for fmt in config.VIZ_CONFIG['plot_formats']:
-                    path = os.path.join(plots_dir, f'heatmap_{hr_feature}.{fmt}')
-                    fig.savefig(path, dpi=300, bbox_inches='tight')
-                plt.close(fig)
+    # 2. Feature profiles
+    logger.info("Creating feature profiles...")
+    audio_cols = [col for col in features_df.columns if col.startswith('audio_')]
+    feature_profile = create_feature_profile(features_df, audio_cols)
     
-    # Plot 3: Effect sizes
-    logger.info("Creating effect size plot...")
-    fig = plot_effect_sizes(
-        effect_sizes,
-        figsize=config.VIZ_CONFIG['effect_sizes_figsize']
-    )
-    
-    for fmt in config.VIZ_CONFIG['plot_formats']:
-        path = os.path.join(plots_dir, f'effect_sizes.{fmt}')
-        fig.savefig(path, dpi=300, bbox_inches='tight')
+    fig = plot_feature_profiles(feature_profile, figsize=config.VIZ_CONFIG['feature_profile_figsize'])
+    plt.savefig(os.path.join(output_dir, 'feature_profiles.png'))
     plt.close(fig)
     
-    # Plot 4: Context profile
-    logger.info("Creating context profile plot...")
-    context_cols = [col for col in context_df.columns if col.startswith('context_')]
-    profile_df = create_context_profile(context_df, context_cols)
-    
-    fig = plot_context_profile(
-        profile_df,
-        figsize=config.VIZ_CONFIG['context_profile_figsize']
+    # 3. Correlation heatmap
+    logger.info("Creating correlation heatmap...")
+    fig = plot_correlation_heatmap(
+        analysis_results['feature_sync_results'], 
+        figsize=config.VIZ_CONFIG['correlation_heatmap_figsize']
     )
     
-    for fmt in config.VIZ_CONFIG['plot_formats']:
-        path = os.path.join(plots_dir, f'context_profile.{fmt}')
-        fig.savefig(path, dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'correlation_heatmap.png'))
     plt.close(fig)
     
-    # Plot 5: Time lag analysis
-    logger.info("Creating time lag analysis plot...")
+    # 4. Correlation plots
+    logger.info("Creating correlation plots...")
+    fig = plot_correlation_values(
+        analysis_results['feature_sync_results'],
+        figsize=config.VIZ_CONFIG['correlation_plot_figsize']
+    )
+    
+    plt.savefig(os.path.join(output_dir, 'correlation_values.png'))
+    plt.close(fig)
+    
+    # 5. Lag analysis
+    logger.info("Creating lag analysis plot...")
     fig = plot_lag_analysis(
-        sync_results['lag_results'],
+        analysis_results['lag_results'],
         figsize=config.VIZ_CONFIG['lag_analysis_figsize']
     )
     
-    for fmt in config.VIZ_CONFIG['plot_formats']:
-        path = os.path.join(plots_dir, f'lag_analysis.{fmt}')
-        fig.savefig(path, dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'lag_analysis.png'))
     plt.close(fig)
     
-    logger.info("Visualization complete.")
+    # 6. Feature-specific plots for the most significant features
+    top_correlations = sorted(
+        analysis_results['correlations'], 
+        key=lambda x: abs(x['correlation']), 
+        reverse=True
+    )
+    
+    if top_correlations:
+        top_feature = top_correlations[0]['sync_feature'].replace('corr_', '')
+        top_audio = top_correlations[0]['audio_feature']
+        
+        logger.info(f"Creating feature-specific plots for {top_feature} and {top_audio}...")
+        
+        # Create scatter plot
+        plt.figure(figsize=(10, 6))
+        plt.scatter(
+            features_df[top_audio], 
+            window_corr[top_feature],
+            alpha=0.7
+        )
+        plt.xlabel(top_audio)
+        plt.ylabel(f'Synchronization ({top_feature})')
+        plt.title(f'Relationship Between {top_audio} and {top_feature} Synchronization')
+        plt.grid(True, alpha=0.3)
+        
+        # Add trendline
+        z = np.polyfit(features_df[top_audio], window_corr[top_feature], 1)
+        p = np.poly1d(z)
+        plt.plot(
+            sorted(features_df[top_audio]), 
+            p(sorted(features_df[top_audio])), 
+            "r--"
+        )
+        
+        plt.savefig(os.path.join(output_dir, f'top_feature_relationship.png'))
+        plt.close()
+    
+    logger.info("Visualization generation complete.")
 
 
-def run_validation(features_df, analysis_results):
+def run_statistical_analysis(analysis_results):
     """
-    Run validation analyses.
+    Run additional statistical analyses.
     
     Parameters:
     -----------
-    features_df : pd.DataFrame
-        DataFrame with all extracted features
     analysis_results : dict
         Dictionary with analysis results
         
     Returns:
     --------
     dict
-        Dictionary with validation results
+        Dictionary with statistical results
     """
-    logger.info("Running validation analyses...")
+    logger.info("Running statistical analyses...")
     
-    # Extract results
-    context_df = analysis_results['context_df']
-    sig_results = analysis_results['significant_results']
+    features_df = analysis_results['features_df']
+    sync_results = analysis_results['sync_results']
     
-    validation_results = {
-        'permutation_tests': [],
-        'cross_validation': [],
-        'sensitivity_analysis': []
-    }
-    
-    # If no significant results, skip validation
-    if len(sig_results) == 0:
-        logger.info("No significant results to validate.")
-        return validation_results
-    
-    # Get top 3 most significant context-feature pairs
-    top_pairs = []
-    for _, row in sig_results.head(3).iterrows():
-        top_pairs.append((row['feature'], row['context']))
-    
-    # Run permutation tests
-    logger.info("Running permutation tests...")
-    for feature, context in top_pairs:
-        # Get binary synchronization series
-        sync_series = analysis_results['sync_results']['binary_synchronization'].get(feature)
-        
-        if sync_series is not None and len(sync_series) > 0:
-            obs_diff, p_value = permutation_test(
-                context_df, 
-                sync_series, 
-                context,
-                n_permutations=config.STATS_CONFIG['permutation_tests']
-            )
-            
-            validation_results['permutation_tests'].append({
-                'feature': feature,
-                'context': context,
-                'observed_diff': obs_diff,
-                'p_value': p_value
-            })
-    
-    # Run cross-validation
+    # Run cross-validation to predict synchronization from features
     logger.info("Running cross-validation...")
-    for feature, context in top_pairs:
-        # Create synchronization column in context_df for cross-validation
-        sync_series = analysis_results['sync_results']['binary_synchronization'].get(feature)
-        
-        if sync_series is not None and len(sync_series) > 0:
-            sync_col = f'sync_{feature}'
-            df_for_cv = context_df.copy()
-            df_for_cv[sync_col] = sync_series.reset_index(drop=True)
-            
-            train_diff, test_diff, generalizes = perform_cross_validation(
-                df_for_cv,
-                context,
-                sync_col,
-                test_size=config.STATS_CONFIG['cross_validation_test_size']
-            )
-            
-            validation_results['cross_validation'].append({
-                'feature': feature,
-                'context': context,
-                'train_diff': train_diff,
-                'test_diff': test_diff,
-                'generalizes': generalizes
-            })
+    cv_results = run_cross_validation(
+        features_df,
+        sync_results['window_correlations'],
+        feature_cols=['audio_tempo', 'audio_dom_freq', 'audio_contrast', 'audio_complexity', 'audio_dynamic_range'],
+        test_size=config.STATS_CONFIG['cross_validation_test_size']
+    )
     
-    # Run sensitivity analysis for the top context-feature pair
-    if len(top_pairs) > 0:
-        logger.info("Running sensitivity analysis...")
-        feature, context = top_pairs[0]
-        
-        sens_results = sensitivity_analysis(
-            features_df,
-            config.SENSITIVITY_CONFIG['window_sizes'],
-            config.SENSITIVITY_CONFIG['sync_thresholds'],
-            context,
-            feature
-        )
-        
-        validation_results['sensitivity_analysis'] = sens_results
-        
-        # Visualize sensitivity analysis
-        fig = plot_sensitivity_heatmap(
-            sens_results,
-            context,
-            feature,
-            figsize=config.VIZ_CONFIG['sensitivity_figsize']
-        )
-        
-        plots_dir = os.path.join(config.DATA_CONFIG['results_dir'], 'plots')
-        for fmt in config.VIZ_CONFIG['plot_formats']:
-            path = os.path.join(plots_dir, f'sensitivity_analysis.{fmt}')
-            fig.savefig(path, dpi=300, bbox_inches='tight')
-        plt.close(fig)
-    
-    # Save validation results
-    validation_path = os.path.join(config.DATA_CONFIG['results_dir'], 'validation_results.csv')
-    
-    # Save permutation tests
-    if validation_results['permutation_tests']:
-        pd.DataFrame(validation_results['permutation_tests']).to_csv(
-            os.path.join(config.DATA_CONFIG['results_dir'], 'permutation_tests.csv'),
-            index=False
-        )
-    
-    # Save cross-validation
-    if validation_results['cross_validation']:
-        pd.DataFrame(validation_results['cross_validation']).to_csv(
-            os.path.join(config.DATA_CONFIG['results_dir'], 'cross_validation.csv'),
-            index=False
-        )
-    
-    # Save sensitivity analysis
-    if isinstance(validation_results['sensitivity_analysis'], pd.DataFrame):
-        validation_results['sensitivity_analysis'].to_csv(
-            os.path.join(config.DATA_CONFIG['results_dir'], 'sensitivity_analysis.csv'),
-            index=False
-        )
-    
-    logger.info("Validation complete.")
-    return validation_results
-
-
-def parse_args():
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description='Run heart rate synchronization analysis.')
-    
-    parser.add_argument('--hr1', required=True, help='Path to heart rate file for participant 1')
-    parser.add_argument('--hr2', required=True, help='Path to heart rate file for participant 2')
-    parser.add_argument('--audio', required=True, help='Path to audio file')
-    parser.add_argument('--skip-validation', action='store_true', help='Skip validation analyses')
-    
-    return parser.parse_args()
+    return {
+        'cross_validation': cv_results
+    }
 
 
 def main():
-    """Main function to run the complete analysis pipeline."""
+    """Main execution function."""
+    # Parse arguments
     args = parse_args()
     
-    # Ensure all directories exist
-    ensure_directories()
+    # Create directories if they don't exist
+    for dir_path in config.DATA_CONFIG.values():
+        os.makedirs(dir_path, exist_ok=True)
     
-    # Load data
-    features_df, window_timestamps = load_data(args.hr1, args.hr2, args.audio)
+    # Create logs directory
+    os.makedirs('logs', exist_ok=True)
     
-    # Run analysis
-    analysis_results = run_analysis(features_df)
-    
-    # Create visualizations
-    create_visualizations(features_df, analysis_results)
-    
-    # Run validation (optional)
-    if not args.skip_validation:
-        validation_results = run_validation(features_df, analysis_results)
-    
-    logger.info("Analysis pipeline completed successfully!")
-
-
-if __name__ == "__main__":
-    # Set up logging
-    logger = setup_logging()
+    logger.info("Starting Heart Rate Synchronization Analysis")
     
     try:
-        main()
+        # Load and prepare data
+        features_df, window_timestamps = load_data(args.hr1, args.hr2, args.audio)
+        
+        # Run analysis
+        analysis_results = run_analysis(features_df)
+        
+        # Run additional statistical analyses
+        stats_results = run_statistical_analysis(analysis_results)
+        
+        # Generate visualizations
+        generate_visualizations(analysis_results, args.output)
+        
+        # Save results
+        results_file = os.path.join(args.output, 'analysis_results.json')
+        
+        # Convert complex objects to JSON-serializable format
+        serializable_results = {
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'feature_sync_correlations': analysis_results['correlations'],
+            'cross_validation': stats_results['cross_validation'],
+            'window_count': len(features_df)
+        }
+        
+        with open(results_file, 'w') as f:
+            json.dump(serializable_results, f, indent=4)
+            
+        logger.info(f"Analysis complete. Results saved to {results_file}")
+        
     except Exception as e:
-        logger.exception(f"Error in main execution: {e}")
-        raise 
+        logger.exception(f"Error during analysis: {str(e)}")
+        raise
+    
+
+if __name__ == "__main__":
+    main() 

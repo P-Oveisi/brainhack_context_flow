@@ -3,7 +3,7 @@ Heart Rate Synchronization - Feature Extraction Module
 
 This module contains functions for extracting features from heart rate and audio data:
 - Heart rate features (mean, std, trend, etc.)
-- Audio features (energy, ZCR, spectral centroid, etc.)
+- Audio features (tempo, dominant frequency, spectral contrast, etc.)
 """
 
 import numpy as np
@@ -87,47 +87,57 @@ def extract_audio_features(audio_window, sr):
     if len(audio_window) < sr // 10:  # Minimum 100ms of audio
         return None
     
-    # Feature 1: RMS Energy
-    audio_energy = np.sqrt(np.mean(audio_window**2))
+    # Feature 1: Tempo/BPM
+    # Use librosa's beat tracking to estimate tempo
+    tempo, _ = librosa.beat.beat_track(y=audio_window, sr=sr)
+    audio_tempo = tempo
     
-    # Feature 2: Zero-Crossing Rate
-    audio_zcr = librosa.feature.zero_crossing_rate(audio_window, frame_length=2048, hop_length=512).mean()
+    # Feature 2: Dominant Frequency
+    # Compute the magnitude spectrum
+    spec = np.abs(librosa.stft(audio_window))
+    # Average over time
+    mean_spec = np.mean(spec, axis=1)
+    # Find the bin with the maximum energy
+    max_bin = np.argmax(mean_spec)
+    # Convert bin to frequency
+    freqs = librosa.fft_frequencies(sr=sr)
+    audio_dom_freq = freqs[max_bin]
     
-    # Feature 3: Spectral Centroid
-    audio_centroid = librosa.feature.spectral_centroid(y=audio_window, sr=sr).mean()
+    # Feature 3: Spectral Contrast
+    # Compute the spectral contrast
+    contrast = librosa.feature.spectral_contrast(y=audio_window, sr=sr)
+    # Average over time and bands
+    audio_contrast = np.mean(contrast)
     
-    # Feature 4: Spectral Flux
-    # Compute the spectrogram
-    stft = np.abs(librosa.stft(audio_window))
-    # Compute the spectral flux as the sum of squared differences between consecutive frames
-    diff = np.diff(stft, axis=1)
-    audio_flux = np.mean(diff**2)
+    # Feature 4: Timeseries Information Complexity
+    # We'll use a simplified estimate based on spectral entropy
+    # Compute the power spectrum
+    power_spec = np.abs(librosa.stft(audio_window))**2
+    # Normalize it
+    power_spec_norm = power_spec / np.sum(power_spec, axis=0, keepdims=True)
+    # Compute entropy along frequency axis
+    entropy = -np.sum(power_spec_norm * np.log2(power_spec_norm + 1e-10), axis=0)
+    # Average over time
+    audio_complexity = np.mean(entropy)
     
-    # Feature 5: Voice Activity Ratio
-    # Simple energy-based voice activity detection
-    # Split into frames
+    # Feature 5: Dynamic Range
+    # Compute the RMS energy in short frames
     frame_length = 1024
     hop_length = 512
     frames = librosa.util.frame(audio_window, frame_length=frame_length, hop_length=hop_length)
-    
-    # Compute energy for each frame
-    energies = np.sum(frames**2, axis=0)
-    
-    # Determine an adaptive energy threshold (could be refined)
-    energy_threshold = 0.2 * np.max(energies)
-    
-    # Count frames above threshold
-    voice_frames = np.sum(energies > energy_threshold)
-    total_frames = len(energies)
-    
-    audio_voice_ratio = voice_frames / total_frames if total_frames > 0 else 0
+    frame_energies = np.sqrt(np.mean(frames**2, axis=0))
+    # Get dynamic range as ratio between max and min energy (in dB)
+    if len(frame_energies) > 0 and np.min(frame_energies) > 0:
+        audio_dynamic_range = 20 * np.log10(np.max(frame_energies) / np.min(frame_energies))
+    else:
+        audio_dynamic_range = 0
     
     features = {
-        'audio_energy': audio_energy,
-        'audio_zcr': audio_zcr,
-        'audio_centroid': audio_centroid,
-        'audio_flux': audio_flux,
-        'audio_voice_ratio': audio_voice_ratio
+        'audio_tempo': audio_tempo,
+        'audio_dom_freq': audio_dom_freq,
+        'audio_contrast': audio_contrast,
+        'audio_complexity': audio_complexity,
+        'audio_dynamic_range': audio_dynamic_range
     }
     
     return features
